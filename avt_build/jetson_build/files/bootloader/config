@@ -57,20 +57,6 @@ class Configuration:
         self.board_sku = board_sku
         self.board_ver = board_ver
 
-
-tx2_devkit = BoardDefinition('Jetson TX2 devkit', '0x18', '3310', [
-    Configuration('2 cameras', 'tegra186-quill-p3310-1000-a00-00-avt-14375-2cam.dtb', '1000'),
-    Configuration('3 cameras (beta)', 'tegra186-quill-p3310-1000-a00-00-avt-14385-3cam.dtb', '1000', beta=True),
-    Configuration('6 cameras with 2 addresses (beta)', 'tegra186-quill-p3310-1000-a00-00-avt-14385-6cam2addr.dtb', '1000', beta=True),
-    Configuration('6 cameras with 6 addresses (beta)', 'tegra186-quill-p3310-1000-a00-00-avt-14385-6cam6addr.dtb', '1000', beta=True),
-    Configuration('None', 'tegra186-quill-p3310-1000-c03-00-base.dtb', '1000'),
-])
-
-tx2_nx_devkit = BoardDefinition('Jetson TX2 NX devkit', '0x18', '3636', [
-    Configuration('DevKit', 'tegra186-p3636-0001-p3509-0000-a01.dtb', '0001'),
-    Configuration('Auvidea JNX30D (beta)', 'tegra186-p3636-0001-auvidea-jnx30d-avt.dtb', '0001', beta=True),
-])
-
 agx_devkit = BoardDefinition('Jetson AGX Xavier devkit', '0x19', '2888', [
     Configuration('2 cameras', 'tegra194-p2888-0001-p2822-0000-avt-14375-2cam.dtb', '0001'),
     Configuration('2 cameras', 'tegra194-p2888-0001-p2822-0000-avt-14375-2cam.dtb', '0004'),
@@ -82,48 +68,38 @@ agx_devkit = BoardDefinition('Jetson AGX Xavier devkit', '0x19', '2888', [
     Configuration('None', 'tegra194-p2888-0001-p2822-0000.dtb', '0004'),
 ])
 
-nx_devkit = BoardDefinition('Jetson Xavier NX devkit', '0x19', '3668', [
-    Configuration('DevKit', 'tegra194-p3668-all-p3509-0000-avt.dtb', '0000'),
-    Configuration('DevKit', 'tegra194-p3668-all-p3509-0000-avt.dtb', '0001'),
-    #NX 16GB
-    Configuration('DevKit', 'tegra194-p3668-all-p3509-0000-avt.dtb', '0003'),
+agx_orin_devkit = BoardDefinition('Jetson AGX Orin devkit', '0x23', '3701', [
+    Configuration('14375: 2 cameras', 'tegra234-p3701-0000-p3737-0000-avt-14375-2cam.dtb', '0000'),
 
-    Configuration('Wahtari nCam Jetson', 'tegra194-p3668-all-p3509-0000-wahtari-ncam-jetson.dtb', '0000'),
-    Configuration('Wahtari nCam Jetson', 'tegra194-p3668-all-p3509-0000-wahtari-ncam-jetson.dtb', '0001'),
-    #NX 16GB
-    Configuration('Wahtari nCam Jetson', 'tegra194-p3668-all-p3509-0000-wahtari-ncam-jetson.dtb', '0003'),
-
-    Configuration('Auvidea JNX30 (beta)', 'tegra194-p3668-all-p3509-0000-auvidea-jnx30.dtb', '0000', beta=True),
-    Configuration('Auvidea JNX30 (beta)', 'tegra194-p3668-all-p3509-0000-auvidea-jnx30.dtb', '0001', beta=True),
-    #NX 16GB
-    Configuration('Auvidea JNX30 (beta)', 'tegra194-p3668-all-p3509-0000-auvidea-jnx30.dtb', '0003', beta=True),
-
-    Configuration('Auvidea JNX30+38491 FPD-Link (beta)', 'tegra194-p3668-all-p3509-0000-auvidea-jnx30-38491.dtb', '0000', beta=True),
-    Configuration('Auvidea JNX30+38491 FPD-Link (beta)', 'tegra194-p3668-all-p3509-0000-auvidea-jnx30-38491.dtb', '0001', beta=True),
-    #NX 16GB
-    Configuration('Auvidea JNX30+38491 FPD-Link (beta)', 'tegra194-p3668-all-p3509-0000-auvidea-jnx30-38491.dtb', '0003', beta=True),
-
-    Configuration('None', 'tegra194-p3668-all-p3509-0000.dtb', '0000'),
-    Configuration('None', 'tegra194-p3668-all-p3509-0000.dtb', '0001'),
-    #NX 16GB
-    Configuration('None', 'tegra194-p3668-all-p3509-0000.dtb', '0003'),
+    Configuration('None', 'tegra234-p3701-0000-p3737-0000.dtb', '0000'),
 ])
 
-nano_devkit = BoardDefinition('Jetson Nano', '0x21', '3448', [
-    Configuration('DevKit', 'tegra210-p3448-0000-p3449-0000-a00.dtb', '0000', '000'),
-    Configuration('DevKit', 'tegra210-p3448-0000-p3449-0000-a01.dtb', '0000', '100'),
-    Configuration('DevKit', 'tegra210-p3448-0000-p3449-0000-a02.dtb', '0000', '200'),
-    Configuration('DevKit', 'tegra210-p3448-0000-p3449-0000-b00.dtb', '0000', '300'),
+nx_devkit = BoardDefinition('Jetson Xavier NX devkit', '0x19', '3668', [
+    Configuration('DevKit', 'tegra194-p3668-0000-p3509-0000-avt.dtb', '0000'),
+    Configuration('DevKit', 'tegra194-p3668-0001-p3509-0000-avt.dtb', '0001'),
+    #NX 16GB
+    Configuration('DevKit', 'tegra194-p3668-0001-p3509-0000-avt.dtb', '0003'),
 
-    Configuration('DevKit', 'tegra210-p3448-0003-p3542-0000.dtb', '0003'),
+    #Configuration('Auvidea JNX30 (beta)', 'tegra194-p3668-all-p3509-0000-auvidea-jnx30.dtb', '0000', beta=True),
+    #Configuration('Auvidea JNX30 (beta)', 'tegra194-p3668-all-p3509-0000-auvidea-jnx30.dtb', '0001', beta=True),
+    #NX 16GB
+    #Configuration('Auvidea JNX30 (beta)', 'tegra194-p3668-all-p3509-0000-auvidea-jnx30.dtb', '0003', beta=True),
+
+    #Configuration('Auvidea JNX30+38491 FPD-Link (beta)', 'tegra194-p3668-all-p3509-0000-auvidea-jnx30-38491.dtb', '0000', beta=True),
+    #Configuration('Auvidea JNX30+38491 FPD-Link (beta)', 'tegra194-p3668-all-p3509-0000-auvidea-jnx30-38491.dtb', '0001', beta=True),
+    #NX 16GB
+    #Configuration('Auvidea JNX30+38491 FPD-Link (beta)', 'tegra194-p3668-all-p3509-0000-auvidea-jnx30-38491.dtb', '0003', beta=True),
+
+    Configuration('None', 'tegra194-p3668-0000-p3509-0000.dtb', '0000'),
+    Configuration('None', 'tegra194-p3668-0001-p3509-0000.dtb', '0001'),
+    #NX 16GB
+    Configuration('None', 'tegra194-p3668-0001-p3509-0000.dtb', '0003'),
 ])
 
 boards = [
-    tx2_devkit,
-    tx2_nx_devkit,
     agx_devkit,
     nx_devkit,
-    nano_devkit
+    agx_orin_devkit
 ]
 
 _label_keywords = ['APPEND', 'FDT', 'FDTDIR', 'INITRD', 'LINUX', 'MENU']

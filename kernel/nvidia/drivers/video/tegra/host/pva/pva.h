@@ -3,7 +3,7 @@
  *
  * Tegra PVA header
  *
- * Copyright (c) 2016-2018, NVIDIA Corporation.  All rights reserved.
+ * Copyright (c) 2016-2021, NVIDIA Corporation.  All rights reserved.
  *
  * This program is free software; you can redistribute it and/or modify it
  * under the terms and conditions of the GNU General Public License,
@@ -21,19 +21,20 @@
 #ifndef __NVHOST_PVA_H__
 #define __NVHOST_PVA_H__
 
-#include <linux/dma-attrs.h>
+#include <linux/workqueue.h>
 #include <linux/mutex.h>
 #include <linux/version.h>
 
-#include "nvhost_queue.h"
+#include "nvpva_queue.h"
 #include "pva_regs.h"
+#include "pva_nvhost.h"
+#include "pva-ucode-header.h"
 
-extern const struct file_operations tegra_pva_ctrl_ops;
+struct nvpva_client_context;
 
 enum pva_submit_mode {
-	PVA_SUBMIT_MODE_MAILBOX		= 0,
-	PVA_SUBMIT_MODE_MMIO_CCQ	= 1,
-	PVA_SUBMIT_MODE_CHANNEL_CCQ	= 2
+	PVA_SUBMIT_MODE_MAILBOX = 0,
+	PVA_SUBMIT_MODE_MMIO_CCQ = 1,
 };
 
 struct pva_version_info {
@@ -47,16 +48,35 @@ struct pva_version_info {
  * Queue count of 8 is maintained per PVA.
  */
 #define MAX_PVA_QUEUE_COUNT 8
+#define MAX_PVA_CLIENTS 8
+#define MAX_PVA_TASK_COUNT_PER_QUEUE	128
 
 /**
- * Maximum task count that a queue can support
+ * Maximum task count that a PVA engine can support
  */
-#define MAX_PVA_TASK_COUNT	16
+#define MAX_PVA_TASK_COUNT                                                     \
+	((MAX_PVA_QUEUE_COUNT) * (MAX_PVA_TASK_COUNT_PER_QUEUE))
 
 /**
  * Minium PVA frequency (10MHz)
  */
-#define MIN_PVA_FREQUENCY	10000000
+#define MIN_PVA_FREQUENCY 10000000
+
+/**
+ * Maximum number of IRQS to be serviced by the driver. Gen1 has a single IRQ,
+ * Gen2 has 9.
+ */
+#define MAX_PVA_IRQS 9
+#define MAX_PVA_INTERFACE 9
+#define PVA_MAILBOX_INDEX 0
+#define PVA_CCQ0_INDEX 1
+#define PVA_CCQ1_INDEX 2
+#define PVA_CCQ2_INDEX 3
+#define PVA_CCQ3_INDEX 4
+#define PVA_CCQ4_INDEX 5
+#define PVA_CCQ5_INDEX 6
+#define PVA_CCQ6_INDEX 7
+#define PVA_CCQ7_INDEX 8
 
 /**
  * @brief		struct to hold the segment details
@@ -105,21 +125,15 @@ struct pva_dma_alloc_info {
  * priv1_buffer		pva_dma_alloc_info for priv1_buffer
  * priv2_buffer		pva_dma_alloc_info for priv2_buffer
  * priv2_reg_offset	priv2 register offset from uCode
- * attrs		dma_attrs struct information
  * trace_buffer_size	buffer size for trace log
  *
  */
 struct pva_fw {
-	struct pva_ucode_hdr *hdr;
+	struct pva_ucode_hdr_s *hdr;
 
 	struct pva_dma_alloc_info priv1_buffer;
 	struct pva_dma_alloc_info priv2_buffer;
 	u32 priv2_reg_offset;
-#if LINUX_VERSION_CODE < KERNEL_VERSION(4, 9, 0)
-	struct dma_attrs attrs;
-#else
-	unsigned long attrs;
-#endif
 
 	u32 trace_buffer_size;
 };
@@ -138,7 +152,6 @@ struct pva_trace_log {
 	u32 offset;
 };
 
-
 /*
  * @brief	stores address and other attributes of the vpu function table
  *
@@ -155,17 +168,61 @@ struct pva_func_table {
 	uint32_t entries;
 };
 
+struct pva_status_interface_registers {
+	uint32_t registers[5];
+};
+
+#define PVA_HW_GEN1 1
+#define PVA_HW_GEN2 2
+
+/**
+ * @brief		HW version specific configuration and functions
+ * read_mailbox		Function to read from mailbox based on PVA revision
+ * write_mailbox	Function to write to mailbox based on PVA revision
+ * ccq_send_task	Function to submit task to ccq based on PVA revision
+ * submit_cmd_sync_locked
+ *			Function to submit command to PVA based on PVA revision
+ *			Should be called only if appropriate locks have been
+ *			acquired
+ *
+ * submit_cmd_sync	Function to submit command to PVA based on PVA revision
+ * irq_count		Number of IRQs associated with this PVA revision
+ *
+ */
+
+struct pva_version_config {
+	u32 (*read_mailbox)(struct platform_device *pdev, u32 mbox_id);
+	void (*write_mailbox)(struct platform_device *pdev, u32 mbox_id,
+			      u32 value);
+	void (*read_status_interface)(struct pva *pva, uint32_t interface_id,
+				      u32 isr_status,
+				      struct pva_cmd_status_regs *status_out);
+	int (*ccq_send_task)(struct pva *pva, u32 queue_id,
+			     dma_addr_t task_addr, u8 batchsize, u32 flags);
+	int (*submit_cmd_sync_locked)(struct pva *pva, struct pva_cmd_s *cmd,
+				      u32 nregs, u32 queue_id,
+				      struct pva_cmd_status_regs *status_regs);
+
+	int (*submit_cmd_sync)(struct pva *pva, struct pva_cmd_s *cmd,
+			       u32 nregs, u32 queue_id,
+			       struct pva_cmd_status_regs *status_regs);
+	int irq_count;
+};
+
 /**
  * @brief		Driver private data, shared with all applications
  *
+ * version		pva version; 1 or 2
  * pdev			Pointer to the PVA device
  * pool			Pointer to Queue table available for the PVA
  * fw_info		firmware information struct
  * irq			IRQ number obtained on registering the module
+ * cmd_waitqueue	Command Waitqueue for response waiters
+ *			for syncronous commands
+ * cmd_status_regs	Response to commands is stored into this
+ *			structure temporarily
+ * cmd_status		Status of the command interface
  * mailbox_mutex	Mutex to avoid concurrent mailbox accesses
- * mailbox_waitq	Mailbox waitqueue for response waiters
- * mailbox_status_regs	Response is stored into this structure temporarily
- * mailbox_status	Status of the mailbox interface
  * debugfs_entry_r5	debugfs segment information for r5
  * debugfs_entry_vpu0	debugfs segment information for vpu0
  * debugfs_entry_vpu1	debugfs segment information for vpu1
@@ -180,15 +237,17 @@ struct pva_func_table {
  *
  */
 struct pva {
+	int version;
+	struct pva_version_config *version_config;
 	struct platform_device *pdev;
-	struct nvhost_queue_pool *pool;
+	struct nvpva_queue_pool *pool;
 	struct pva_fw fw_info;
 
-	int irq;
+	int irq[MAX_PVA_IRQS];
 
-	wait_queue_head_t mailbox_waitqueue;
-	struct pva_mailbox_status_regs mailbox_status_regs;
-	enum pva_mailbox_status mailbox_status;
+	wait_queue_head_t cmd_waitqueue[MAX_PVA_INTERFACE];
+	struct pva_cmd_status_regs cmd_status_regs[MAX_PVA_INTERFACE];
+	enum pva_cmd_status cmd_status[MAX_PVA_INTERFACE];
 	struct mutex mailbox_mutex;
 
 	struct mutex ccq_mutex;
@@ -199,21 +258,34 @@ struct pva {
 
 	struct pva_dma_alloc_info priv1_dma;
 	struct pva_dma_alloc_info priv2_dma;
+	/* Circular array to share with PVA R5 FW for task status info */
+	struct pva_dma_alloc_info priv_circular_array;
+	/* Current position to read task status buffer from the circular
+	 * array
+	 */
+	u32 circular_array_rd_pos;
+	struct work_struct task_update_work;
+	atomic_t n_pending_tasks;
+	struct workqueue_struct *task_status_workqueue;
 
 	struct pva_trace_log pva_trace;
-	u32 submit_mode;
+	u32 submit_task_mode;
+	u32 submit_cmd_mode;
 
-	u32 dbg_vpu_app_id;
 	u32 r5_dbg_wait;
 	bool timeout_enabled;
 	u32 slcg_disable;
 	u32 vmem_war_disable;
 	bool vpu_perf_counters_enable;
+	bool vpu_debug_enabled;
 
 	struct work_struct pva_abort_handler_work;
 	bool booted;
 
 	u32 log_level;
+
+	struct nvpva_client_context *clients;
+	struct mutex clients_lock;
 };
 
 /**
@@ -229,34 +301,7 @@ struct pva {
 void pva_trace_copy_to_ftrace(struct pva *pva);
 
 /**
- * @brief	Finalize the PVA Power-on-Sequence.
- *
- * This function called from host subsystem driver after the PVA
- * partition has been brought up, clocks enabled and reset deasserted.
- * In production mode, the function needs to wait until the ready  bit
- * within the PVA aperture has been set. After that enable the PVA IRQ.
- * Register the queue priorities on the PVA.
- *
- * @param pdev	Pointer to PVA device
- * @return:	0 on Success or negative error code
- *
- */
-int pva_finalize_poweron(struct platform_device *pdev);
-
-/**
- * @brief	Prepare PVA poweroff.
- *
- * This function called from host subsystem driver before turning off
- * the PVA. The function should turn off the PVA IRQ.
- *
- * @param pdev	Pointer to PVA device
- * @return	0 on Success or negative error code
- *
- */
-int pva_prepare_poweroff(struct platform_device *pdev);
-
-/**
- * @brief	Register PVA ISR.
+ * @brief	Register PVA ISR
  *
  * This function called from driver to register the
  * PVA ISR with IRQ.
@@ -344,8 +389,7 @@ void pva_dealloc_vpu_function_table(struct pva *pva,
  *
  * @return	0 on success, otherwise a negative error code
  */
-int pva_get_firmware_version(struct pva *pva,
-			     struct pva_version_info *info);
+int pva_get_firmware_version(struct pva *pva, struct pva_version_info *info);
 
 /**
  * @brief	Set trace log level of PVA
@@ -355,6 +399,16 @@ int pva_get_firmware_version(struct pva *pva,
  *
  * @return	0 on success, otherwise a negative error code
  */
-int pva_set_log_level(struct pva *pva,
-			     u32 log_level);
+
+/**
+ * @brief	Get PVA Boot KPI
+ *
+ * @param pva	Pointer to a PVA device node
+ * @param r5_boot_time	Pointer to a variable, where r5 boot time will be filled
+ *
+ * @return	0 on success, otherwise a negative error code
+ */
+int pva_boot_kpi(struct pva *pva, u64 *r5_boot_time);
+
+int pva_set_log_level(struct pva *pva, u32 log_level, bool mailbox_locked);
 #endif

@@ -3,7 +3,7 @@
  *
  * A header file for Host driver for ADSP and APE
  *
- * Copyright (C) 2014-2019, NVIDIA Corporation. All rights reserved.
+ * Copyright (C) 2014-2021, NVIDIA Corporation. All rights reserved.
  *
  * This software is licensed under the terms of the GNU General Public
  * License version 2, as published by the Free Software Foundation, and
@@ -25,6 +25,13 @@
 #include <linux/debugfs.h>
 
 #include <linux/platform/tegra/emc_bwmgr.h>
+#if KERNEL_VERSION(5, 9, 0) <= LINUX_VERSION_CODE
+#ifdef CONFIG_ARCH_TEGRA_23x_SOC
+#include <linux/platform/tegra/mc_utils.h>
+#include <dt-bindings/interconnect/tegra_icc_id.h>
+#endif
+#include <linux/interconnect.h>
+#endif
 
 #include "hwmailbox.h"
 #include "amc.h"
@@ -89,6 +96,13 @@ enum adsp_unit_fpga_reset {
 #define AMISC_REG_MBOX_OFFSET		0x64
 #define ADSP_ACTMON_REG_START_OFFSET	0x800
 #define ADSP_ACTMON_REG_END_OFFSET	0x828
+#if KERNEL_VERSION(5, 9, 0) <= LINUX_VERSION_CODE
+#ifdef CONFIG_ARCH_TEGRA_23x_SOC
+#define FREQ2ICC(x) (Bps_to_icc(emc_freq_to_bw(x)))
+#else
+#define FREQ2ICC(x) 0UL
+#endif
+#endif
 
 enum nvadsp_virqs {
 	MBOX_SEND_VIRQ,
@@ -132,6 +146,7 @@ struct nvadsp_chipdata {
 	u32			adsp_state_hwmbox;
 	u32			adsp_thread_hwmbox;
 	u32			adsp_irq_hwmbox;
+	u32			adsp_shared_mem_hwmbox;
 	reset_init		reset_init;
 	os_init			os_init;
 #ifdef CONFIG_PM
@@ -140,6 +155,8 @@ struct nvadsp_chipdata {
 	int			wdt_irq;
 	int			start_irq;
 	int			end_irq;
+
+	bool			amc_err_war;
 };
 
 struct nvadsp_drv_data {
@@ -175,6 +192,7 @@ struct nvadsp_drv_data {
 	int (*assert_adsp)(struct nvadsp_drv_data *drv_data);
 	int (*deassert_adsp)(struct nvadsp_drv_data *drv_data);
 	struct reset_control *adspall_rst;
+	struct reset_control *ape_tke_rst;
 
 	struct nvadsp_pm_state state;
 	bool adsp_os_running;
@@ -182,6 +200,7 @@ struct nvadsp_drv_data {
 	bool adsp_os_secload;
 
 	void *shared_adsp_os_data;
+	dma_addr_t shared_adsp_os_data_iova;
 
 #ifdef CONFIG_TEGRA_ADSP_DFS
 	bool dfs_initialized;
@@ -212,9 +231,21 @@ struct nvadsp_drv_data {
 	int agic_irqs[NVADSP_VIRQ_MAX];
 
 	struct tegra_bwmgr_client *bwmgr;
+#if KERNEL_VERSION(5, 9, 0) <= LINUX_VERSION_CODE
+	struct icc_path *icc_path_handle; /* icc_path handle handle */
+#endif
 	u32 evp_base[ADSP_EVP_END];
 
 	const struct nvadsp_chipdata *chip_data;
+
+	/* CO mem in backdoor boot */
+	struct resource co_mem;
+
+	/* enum tegra_platform */
+	u32 tegra_platform;
+
+	/* "nvidia,adsp_load_timeout" (in ms) */
+	u32 adsp_load_timeout;
 };
 
 #define ADSP_CONFIG	0x04
@@ -225,6 +256,7 @@ status_t nvadsp_mbox_init(struct platform_device *pdev);
 
 int nvadsp_setup_amc_interrupts(struct platform_device *pdev);
 void nvadsp_free_amc_interrupts(struct platform_device *pdev);
+int nvadsp_set_bw(struct nvadsp_drv_data *drv, u32 efreq);
 
 #ifdef CONFIG_TEGRA_ADSP_DFS
 void adsp_cpu_set_rate(unsigned long freq);

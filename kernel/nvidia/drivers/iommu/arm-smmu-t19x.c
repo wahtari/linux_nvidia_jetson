@@ -15,7 +15,7 @@
  * Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA 02111-1307, USA.
  *
  * Copyright (C) 2013 ARM Limited
- * Copyright (c) 2015-2021, NVIDIA CORPORATION. All rights reserved.
+ * Copyright (c) 2015-2020, NVIDIA CORPORATION. All rights reserved.
  *
  * Author: Will Deacon <will.deacon@arm.com>
  *
@@ -50,13 +50,17 @@
 #include <linux/debugfs.h>
 #include <linux/uaccess.h>
 #include <linux/dma-attrs.h>
+#include <linux/version.h>
+#if KERNEL_VERSION(4, 15, 0) > LINUX_VERSION_CODE
 #include <soc/tegra/chip-id.h>
+#else
+#include <soc/tegra/fuse.h>
+#endif
 #include <linux/ktime.h>
 #include <linux/string.h>
 #include <linux/dma-override.h>
 
 #include <linux/amba/bus.h>
-#include <linux/version.h>
 
 #include <linux/arm-smmu-suspend.h>
 
@@ -1291,10 +1295,8 @@ static struct iommu_domain *arm_smmu_domain_alloc(unsigned type)
 	 */
 	smmu_domain->domain.pgsize_bitmap = ALL_PGSIZES_BITMAP;
 
-#if LINUX_VERSION_CODE >= KERNEL_VERSION(4, 9, 0)
 	if (iommu_get_dma_cookie(&smmu_domain->domain))
 		goto out_free_domain;
-#endif
 
 	return &smmu_domain->domain;
 
@@ -1376,9 +1378,7 @@ static void arm_smmu_domain_free(struct iommu_domain *domain)
 	 * Free the domain resources. We assume that all devices have
 	 * already been detached.
 	 */
-#if LINUX_VERSION_CODE >= KERNEL_VERSION(4, 9, 0)
 	iommu_put_dma_cookie(domain);
-#endif
 	arm_smmu_destroy_domain_context(domain);
 	arm_smmu_free_pgtables(smmu_domain);
 	kfree(smmu_domain);
@@ -1680,18 +1680,12 @@ static int smmu_master_show(struct seq_file *s, void *unused)
 	int i;
 	struct arm_smmu_master *master = s->private;
 
-	if (!master->cfg)
-		return 0;
 	for (i = 0; i < master->cfg->num_streamids; i++)
 		seq_printf(s, "streamids: % 3d ", master->cfg->streamids[i]);
 	seq_printf(s, "\n");
-
-	if (!master->cfg->smrs)
-		return 0;
 	for (i = 0; i < master->cfg->num_streamids; i++)
 		seq_printf(s, "smrs:      % 3d ", master->cfg->smrs[i].idx);
 	seq_printf(s, "\n");
-
 	return 0;
 }
 
@@ -1737,20 +1731,16 @@ static void arm_smmu_do_linear_map(struct device *dev)
 
 	if (iommu_get_linear_map(dev, &map)) {
 		int err;
-		DEFINE_DMA_ATTRS(attrs);
 
 		if (map->is_mapped)
 			return;
-
-		dma_set_attr(DMA_ATTR_SKIP_IOVA_GAP, __DMA_ATTR(attrs));
-		dma_set_attr(DMA_ATTR_SKIP_CPU_SYNC, __DMA_ATTR(attrs));
 
 		while (map && map->size) {
 
 			size_t size = PAGE_ALIGN(map->size);
 
 			err = dma_map_linear_attrs(dev, map->start,
-						size, 0, __DMA_ATTR(attrs));
+						size, 0, DMA_ATTR_SKIP_IOVA_GAP | DMA_ATTR_SKIP_CPU_SYNC);
 			if (err == DMA_ERROR_CODE) {
 				dev_err(dev,
 					"IOVA linear map %pad(%zx) failed\n",
@@ -1782,7 +1772,7 @@ static int arm_smmu_attach_dev(struct iommu_domain *domain, struct device *dev)
 		return -ENXIO;
 	}
 
-	if (dev->archdata.iommu) {
+	if (iommu_get_domain_for_dev(dev)) {
 		dev_err(dev, "already attached to IOMMU domain\n");
 		return -EEXIST;
 	}
@@ -1825,23 +1815,24 @@ static int arm_smmu_attach_dev(struct iommu_domain *domain, struct device *dev)
 	if (!cfg)
 		return -ENODEV;
 
-#if LINUX_VERSION_CODE >= KERNEL_VERSION(4, 9, 0)
+	ret = arm_smmu_domain_add_master(smmu_domain, cfg);
+	if (!ret) {
+#if LINUX_VERSION_CODE < KERNEL_VERSION(5, 9, 0)
+		dev->archdata.iommu = domain;
+#endif
+		add_smmu_master_debugfs(domain, dev,
+				find_smmu_master(smmu, dev_get_dev_node(dev)));
+	}
+
 	if (iommu_dma_init_domain(domain,
 				domain->geometry.aperture_start,
 				domain->geometry.aperture_end -
 				domain->geometry.aperture_start, dev))
 		pr_err("iommu_dma_init_domain failed, %s\n",
 				dev_name(dev));
-#endif
 
 	arm_smmu_do_linear_map(dev);
 
-	ret = arm_smmu_domain_add_master(smmu_domain, cfg);
-	if (!ret) {
-		dev->archdata.iommu = domain;
-		add_smmu_master_debugfs(domain, dev,
-				find_smmu_master(smmu, dev_get_dev_node(dev)));
-	}
 	/* Enable stream Id override, which enables SMMU translation for dev */
 	for (i = 0; i < cfg->num_streamids; i++)
 		platform_override_streamid(cfg->streamids[i]);
@@ -1870,7 +1861,9 @@ static void arm_smmu_detach_dev(struct iommu_domain *domain, struct device *dev)
 	if (!cfg)
 		return;
 
+#if LINUX_VERSION_CODE < KERNEL_VERSION(5, 9, 0)
 	dev->archdata.iommu = NULL;
+#endif
 	arm_smmu_domain_remove_master(smmu_domain, cfg);
 }
 
@@ -2249,34 +2242,6 @@ out_unlock:
 	return ret;
 }
 
-#if LINUX_VERSION_CODE < KERNEL_VERSION(4, 9, 0)
-static size_t arm_smmu_map_sg(struct iommu_domain *domain, unsigned long iova,
-			struct scatterlist *sgl, unsigned int npages,
-			unsigned long prot)
-{
-	int i;
-	struct scatterlist *sg;
-	struct arm_smmu_domain *smmu_domain = to_smmu_domain(domain);
-
-	for (i = 0, sg = sgl; i < npages; sg = sg_next(sg)) {
-		int err;
-		phys_addr_t pa = sg_phys(sg) & PAGE_MASK;
-		unsigned int len = PAGE_ALIGN(sg->offset + sg->length);
-
-		pr_debug("%s() iova=%pad pa=%pap size=%x\n",
-			__func__, &iova, &pa, len);
-		err = arm_smmu_handle_mapping(smmu_domain, iova, pa, len, prot);
-		if (err)
-			return err;
-
-		i += len >> PAGE_SHIFT;
-		iova += len;
-	}
-
-	return 0;
-}
-#endif
-
 static int arm_smmu_map(struct iommu_domain *domain, unsigned long iova,
 			phys_addr_t paddr, size_t size, unsigned long prot)
 {
@@ -2484,20 +2449,14 @@ static const struct iommu_ops arm_smmu_ops = {
 	.attach_dev	= arm_smmu_attach_dev,
 	.detach_dev	= arm_smmu_detach_dev,
 	.get_hwid	= arm_smmu_get_hwid,
-#if LINUX_VERSION_CODE  > KERNEL_VERSION(4, 9, 0)
 	.map_sg		= default_iommu_map_sg,
-#else
-	.map_sg		= arm_smmu_map_sg,
-#endif
 	.map		= arm_smmu_map,
 	.unmap		= arm_smmu_unmap,
 	.iova_to_phys	= arm_smmu_iova_to_phys,
 	.add_device	= arm_smmu_add_device,
 	.remove_device	= arm_smmu_remove_device,
 	.pgsize_bitmap	= ALL_PGSIZES_BITMAP,
-#if LINUX_VERSION_CODE  > KERNEL_VERSION(4, 9, 0)
 	.ignore_align	= 1,
-#endif
 };
 
 static void arm_smmu_device_reset(struct arm_smmu_device *smmu)
@@ -2520,8 +2479,7 @@ static void arm_smmu_device_reset(struct arm_smmu_device *smmu)
 
 	/* Mark all SMRn as invalid and all S2CRn as bypass */
 	for (i = 0; i < smmu->num_mapping_groups; ++i) {
-		if (smmu->features & ARM_SMMU_FEAT_STREAM_MATCH)
-			writel_relaxed(0, gr0_base + ARM_SMMU_GR0_SMR(i));
+		writel_relaxed(0, gr0_base + ARM_SMMU_GR0_SMR(i));
 		writel_relaxed(S2CR_TYPE_BYPASS,
 			gr0_base + ARM_SMMU_GR0_S2CR(i));
 	}
@@ -2967,6 +2925,22 @@ DEFINE_SIMPLE_ATTRIBUTE(debug_smmu_id_debugfs_fops,
 			debug_smmu_id_debugfs_get,
 			debug_smmu_id_debugfs_set, "%08llx\n");
 
+static int num_smmus_debugfs_set(void *data, u64 val)
+{
+	return 0;
+}
+
+static int num_smmus_debugfs_get(void *data, u64 *val)
+{
+	struct arm_smmu_device *smmu = (struct arm_smmu_device *)data;
+	*val = smmu->num_smmus;
+	return 0;
+}
+
+DEFINE_SIMPLE_ATTRIBUTE(num_smmus_debugfs_fops,
+			num_smmus_debugfs_get,
+			num_smmus_debugfs_set, "%08llx\n");
+
 static void arm_smmu_debugfs_create(struct arm_smmu_device *smmu)
 {
 	int i;
@@ -2981,15 +2955,16 @@ static void arm_smmu_debugfs_create(struct arm_smmu_device *smmu)
 	debugfs_create_file("debug_smmu_id", S_IRUGO | S_IWUSR,
 			smmu->debugfs_root, smmu, &debug_smmu_id_debugfs_fops);
 
+	debugfs_create_file("num_smmus", S_IRUSR, smmu->debugfs_root,
+					 smmu, &num_smmus_debugfs_fops);
+
 	dent_gr = debugfs_create_dir("gr", smmu->debugfs_root);
 	if (!dent_gr)
 		goto err_out;
 
-	if (!is_tegra_hypervisor_mode()) {
-		dent_gnsr = debugfs_create_dir("gnsr", smmu->debugfs_root);
-		if (!dent_gnsr)
-			goto err_out;
-	}
+	dent_gnsr = debugfs_create_dir("gnsr", smmu->debugfs_root);
+	if (!dent_gnsr)
+		goto err_out;
 
 	smmu->masters_root = debugfs_create_dir("masters", smmu->debugfs_root);
 	if (!smmu->masters_root)
@@ -3050,82 +3025,75 @@ static void arm_smmu_debugfs_create(struct arm_smmu_device *smmu)
 	debugfs_create_regset32("regdump", S_IRUGO, smmu->debugfs_root,
 				smmu->regset);
 
-	if (!is_tegra_hypervisor_mode()) {
-		bytes = sizeof(*smmu->perf_regset);
-		bytes += ARRAY_SIZE(arm_smmu_gnsr0_regs) * sizeof(*regs);
-		/*
-		 * Account the number of bytes for two sets of
-		 * counter group registers
-		 */
-		bytes += 2 * PMCG_SIZE * sizeof(*regs);
-		/*
-		 * Account the number of bytes for two sets of
-		 * event counter registers
-		 */
-		bytes += 2 * PMEV_SIZE * sizeof(*regs);
+	bytes = sizeof(*smmu->perf_regset);
+	bytes += ARRAY_SIZE(arm_smmu_gnsr0_regs) * sizeof(*regs);
+	/*
+	 * Account the number of bytes for two sets of
+	 * counter group registers
+	 */
+	bytes += 2 * PMCG_SIZE * sizeof(*regs);
+	/*
+	 * Account the number of bytes for two sets of
+	 * event counter registers
+	 */
+	bytes += 2 * PMEV_SIZE * sizeof(*regs);
 
-		/* Allocate memory for Perf Monitor registers */
-		smmu->perf_regset =  kzalloc(bytes, GFP_KERNEL);
-		if (!smmu->perf_regset)
+	/* Allocate memory for Perf Monitor registers */
+	smmu->perf_regset =  kzalloc(bytes, GFP_KERNEL);
+	if (!smmu->perf_regset)
+		goto err_out;
+
+	/*
+	 * perf_regset base address is placed at offset (3 * smmu_pagesize)
+	 * from smmu->base address
+	 */
+	smmu->perf_regset->base = smmu->base[0] + 3 * (1 << smmu->pgshift);
+	smmu->perf_regset->nregs = ARRAY_SIZE(arm_smmu_gnsr0_regs) +
+		2 * PMCG_SIZE + 2 * PMEV_SIZE;
+	smmu->perf_regset->regs =
+		(struct debugfs_reg32 *)(smmu->perf_regset + 1);
+
+	regs = (struct debugfs_reg32 *)smmu->perf_regset->regs;
+
+	for (i = 0; i < ARRAY_SIZE(arm_smmu_gnsr0_regs); i++) {
+		regs->name = arm_smmu_gnsr0_regs[i].name;
+		regs->offset = arm_smmu_gnsr0_regs[i].offset;
+		regs++;
+	}
+
+	for (i = 0; i < PMEV_SIZE; i++) {
+		regs->name = kasprintf(GFP_KERNEL, "GNSR0_PMEVTYPER%d_0", i);
+		if (!regs->name)
 			goto err_out;
+		regs->offset = ARM_SMMU_GNSR0_PMEVTYPER(i);
+		regs++;
 
-		/*
-		 * perf_regset base address is placed at offset
-		 * (3 * smmu_pagesize) from smmu->base address
-		 */
-		smmu->perf_regset->base = smmu->base[0] +
-			3 * (1 << smmu->pgshift);
-		smmu->perf_regset->nregs = ARRAY_SIZE(arm_smmu_gnsr0_regs) +
-			2 * PMCG_SIZE + 2 * PMEV_SIZE;
-		smmu->perf_regset->regs =
-			(struct debugfs_reg32 *)(smmu->perf_regset + 1);
-
-		regs = (struct debugfs_reg32 *)smmu->perf_regset->regs;
-
-		for (i = 0; i < ARRAY_SIZE(arm_smmu_gnsr0_regs); i++) {
-			regs->name = arm_smmu_gnsr0_regs[i].name;
-			regs->offset = arm_smmu_gnsr0_regs[i].offset;
-			regs++;
-		}
-
-		for (i = 0; i < PMEV_SIZE; i++) {
-			regs->name = kasprintf(GFP_KERNEL,
-				"GNSR0_PMEVTYPER%d_0", i);
-			if (!regs->name)
-				goto err_out;
-			regs->offset = ARM_SMMU_GNSR0_PMEVTYPER(i);
-			regs++;
-
-			regs->name = kasprintf(GFP_KERNEL,
-				"GNSR0_PMEVCNTR%d_0", i);
-			if (!regs->name)
-				goto err_out;
-			regs->offset = ARM_SMMU_GNSR0_PMEVCNTR(i);
-			regs++;
-		}
-
-		for (i = 0; i < PMCG_SIZE; i++) {
-			regs->name = kasprintf(GFP_KERNEL,
-				"GNSR0_PMCGCR%d_0", i);
-			if (!regs->name)
+		regs->name = kasprintf(GFP_KERNEL, "GNSR0_PMEVCNTR%d_0", i);
+		if (!regs->name)
 			goto err_out;
-			regs->offset = ARM_SMMU_GNSR0_PMCGCR(i);
-			regs++;
+		regs->offset = ARM_SMMU_GNSR0_PMEVCNTR(i);
+		regs++;
+	}
 
-			regs->name = kasprintf(GFP_KERNEL,
-				"GNSR0_PMCGSMR%d_0", i);
-			if (!regs->name)
-				goto err_out;
-			regs->offset = ARM_SMMU_GNSR0_PMCGSMR(i);
-			regs++;
-		}
+	for (i = 0; i < PMCG_SIZE; i++) {
+		regs->name = kasprintf(GFP_KERNEL, "GNSR0_PMCGCR%d_0", i);
+		if (!regs->name)
+			goto err_out;
+		regs->offset = ARM_SMMU_GNSR0_PMCGCR(i);
+		regs++;
 
-		regs = (struct debugfs_reg32 *)smmu->perf_regset->regs;
-		for (i = 0; i < smmu->perf_regset->nregs; i++) {
-			debugfs_create_file(regs->name, S_IRUGO | S_IWUSR,
-				dent_gnsr, regs, &smmu_perf_regset_debugfs_fops);
-			regs++;
-		}
+		regs->name = kasprintf(GFP_KERNEL, "GNSR0_PMCGSMR%d_0", i);
+		if (!regs->name)
+			goto err_out;
+		regs->offset = ARM_SMMU_GNSR0_PMCGSMR(i);
+		regs++;
+	}
+
+	regs = (struct debugfs_reg32 *)smmu->perf_regset->regs;
+	for (i = 0; i < smmu->perf_regset->nregs; i++) {
+		debugfs_create_file(regs->name, S_IRUGO | S_IWUSR,
+			dent_gnsr, regs, &smmu_perf_regset_debugfs_fops);
+		regs++;
 	}
 
 	debugfs_create_file("context_filter", S_IRUGO | S_IWUSR,
@@ -3166,9 +3134,6 @@ static int arm_smmu_device_dt_probe(struct platform_device *pdev)
 #ifdef CONFIG_ARM_SMMU_SUSPEND
 	u32 suspend_save_reg;
 #endif
-
-	if (tegra_platform_is_unit_fpga())
-		return -ENODEV;
 
 	smmu = devm_kzalloc(dev, sizeof(*smmu), GFP_KERNEL);
 	if (!smmu) {

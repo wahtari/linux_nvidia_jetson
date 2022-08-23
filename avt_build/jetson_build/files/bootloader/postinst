@@ -1,6 +1,6 @@
 #!/bin/bash
 
-# Copyright (c) 2020, NVIDIA CORPORATION.  All rights reserved.
+# Copyright (c) 2020-2022, NVIDIA CORPORATION.  All rights reserved.
 #
 # NVIDIA CORPORATION and its licensors retain all intellectual property
 # and proprietary rights in and to this software, related documentation
@@ -17,15 +17,31 @@ BOOT_CTRL_CONF="/etc/nv_boot_control.conf"
 OTA_PACKAGE_DIR="/opt/ota_package"
 T186REF_UPDATER="/usr/sbin/nv_update_engine"
 T186REF_NVBOOTCTRL="/usr/sbin/nvbootctrl"
-T210REF_UPDATER="/usr/sbin/l4t_payload_updater_t210"
 UPDATE_CONF="/opt/nvidia/l4t-bootloader-config/nv-l4t-bootloader-config.sh"
+L4T_LAUNCHER="BOOTAA64.efi"
 bl_update_payload="bl_update_payload"
 bl_only_payload="bl_only_payload"
+use_war="true"
 
 if [ -e "/opt/nvidia/l4t-packages/.nv-l4t-disable-boot-fw-update-in-preinstall" ]; then
     echo "Pre-installing bootloader package, skip flashing"
     exit 0
 fi
+
+chkerr () {
+    # shellcheck disable=SC2181
+    if [ $? -ne 0 ]; then
+        if [ "$1" != "" ]; then
+            echo "$1";
+        else
+            echo "failed.";
+        fi;
+        exit 1;
+    fi;
+    if [ "$1" = "" ]; then
+        echo "done.";
+    fi;
+}
 
 reboot_notify () {
     if [ -d /var/lib/update-notifier/user.d/ ]; then
@@ -104,38 +120,6 @@ t186ref_update () {
     fi
 }
 
-t210ref_update () {
-    echo "Starting bootloader post-install procedure."
-
-    if [ -x "${T210REF_UPDATER}" ]; then
-        local payload_name="${bl_update_payload}"
-        if [ -f "${payload_dir}/${payload_name}" ]; then
-            # shellcheck disable=SC2164
-            pushd "${payload_dir}" &> /dev/null
-            "${T210REF_UPDATER}" "${payload_dir}/${payload_name}" &> "${OTA_PACKAGE_DIR}/${payload_name}.log"
-            # shellcheck disable=SC2181
-            if [ $? -ne 0 ]; then
-                echo "ERROR. Procedure for bootloader update FAILED."
-                echo "Cannot install package. Exiting..."
-                exit 1
-            fi;
-            # shellcheck disable=SC2164
-            popd &> /dev/null
-            echo "Update bootloader completed."
-            echo "Reboot the target system for changes to take effect."
-            reboot_notify
-        else
-            echo "ERROR. ${payload_dir}/${payload_name} does not exist."
-            echo "Cannot install package. Exiting..."
-            exit 1
-        fi
-    else
-        echo "ERROR. ${T210REF_UPDATER} is NOT executable, post install script FAILED."
-        echo "Cannot install package. Exiting..."
-        exit 1
-    fi
-}
-
 extlinux_update () {
 	local extlinux_conf="/boot/extlinux/extlinux.conf"
 
@@ -176,6 +160,104 @@ extlinux_update () {
 	fi
 }
 
+t186ref_check_unsupported () {
+    local unsupported_boards=(
+        'jetson-agx-xavier-industrial'
+        'jetson-agx-xavier-industrial-mxn'
+    )
+    # shellcheck disable=SC2155
+    local compatible_spec=$( awk '/COMPATIBLE_SPEC/ {print $2}' "${BOOT_CTRL_CONF}" )
+
+    for spec in "${unsupported_boards[@]}"; do
+        if [[ ${compatible_spec} == *-${spec}- ]]; then
+            echo "WARNING. Bootloader update for ${spec} is not supported."
+            return 1
+        fi;
+    done
+    return 0
+}
+
+force_install_payload () {
+    local payload_name="${1}"
+
+    if [ -f "${payload_dir}/${payload_name}" ]; then
+        # shellcheck disable=SC2164
+        pushd "${payload_dir}" &> /dev/null
+        # The update engine and payload updater currently only consumes payloads
+        # named "/opt/ota_package/bl_update_payload"
+        cp "${payload_name}" "${OTA_PACKAGE_DIR}"/bl_update_payload
+        "${T186REF_UPDATER}" --forced-install &> "${OTA_PACKAGE_DIR}/${payload_name}.log"
+        # shellcheck disable=SC2181
+        if [ $? -ne 0 ]; then
+            echo "ERROR. Procedure for ${payload_name} update FAILED."
+            echo "Cannot install package. Exiting..."
+            exit 1
+        fi
+        # shellcheck disable=SC2164
+        popd &> /dev/null
+        echo "Update ${payload_name} completed."
+    else
+        echo "ERROR. ${payload_dir}/${payload_name} does not exist."
+        echo "Cannot install package. Exiting..."
+        exit 1
+    fi
+}
+
+force_install_esp() {
+    local payload_name="${1}";
+    local esp_path="/dev/disk/by-partlabel/esp";
+    # shellcheck disable=SC2155
+    local esp_dev=$(readlink -f ${esp_path});
+
+    if [ ! -e "${esp_dev}" ]; then
+        echo "ERROR. esp partition does not found.";
+        echo "Cannot install package. Exiting...";
+        exit 1;
+    fi
+
+    if [ -f "${payload_dir}/${payload_name}" ]; then
+        mkdir -p esp; chkerr "Make esp mount point failed.";
+        mount "${esp_dev}" esp; chkerr "Mount ${esp_dev} failed.";
+
+        echo "Updating esp partition...";
+        cp -f "${payload_dir}/${payload_name}" esp/EFI/BOOT/;
+        chkerr "Copying ${payload_dir}/${payload_name} failed.";
+        sync;
+        chkerr;
+
+        umount "${esp_dev}" > /dev/null 2>&1;
+        rmdir esp > /dev/null 2>&1;
+    else
+        echo "ERROR. ${payload_dir}/${payload_name} does not exist.";
+        echo "Cannot install package. Exiting...";
+        exit 1;
+    fi
+}
+
+force_update() {
+    echo "Starting bootloader post-install procedure."
+
+    if [ -x "${T186REF_UPDATER}" ]; then
+        # WAR: install bootloader componets to current slot
+        # Installing bl_only_payload.
+        # kernel and kernel-dtb are installed along with Kernel Deb package.
+        force_install_payload "${bl_only_payload}"
+
+        # WAR: Until UEFI capsule mechanism is ready, we should always update esp
+        # partition in case L4tlauncher is changed. In general, esp partition update
+        # is handled by UEFI.
+        force_install_esp "${L4T_LAUNCHER}"
+
+        echo "Reboot the target system for changes to take effect."
+        reboot_notify
+    else
+        echo "ERROR. ${T186REF_UPDATER} or ${T186REF_NVBOOTCTRL} is NOT executable."
+        echo "Post install script FAILED."
+        echo "Cannot install package. Exiting..."
+        exit 1
+    fi
+}
+
 if [ ! -r "${BOOT_CTRL_CONF}" ]; then
     echo "ERROR. Cannot open ${BOOT_CTRL_CONF} for reading."
     echo "Cannot install package. Exiting..."
@@ -188,17 +270,22 @@ chipid=$( awk '/TEGRA_CHIPID/ {print $2}' "${BOOT_CTRL_CONF}" )
 payload_dir="${OTA_PACKAGE_DIR}"
 
 case "${chipid}" in
-    0x18)
-        payload_dir+="/t18x"
-        t186ref_update
-        ;;
     0x19)
-        payload_dir+="/t19x"
-        t186ref_update
+        # skip installing BUP on unsupported boards
+        if t186ref_check_unsupported; then
+            payload_dir+="/t19x"
+
+            # When use WAR, force t19x to update A path partitions
+            if [ "${use_war}" = "true" ]; then
+                force_update
+            else
+                t186ref_update
+            fi
+        fi
         ;;
-    0x21)
-        payload_dir+="/t21x"
-        t210ref_update
+    0x23)
+        payload_dir+="/t23x"
+        force_update
         ;;
     *)
         echo "ERROR. Unrecognized chip ID: ${chipid}."

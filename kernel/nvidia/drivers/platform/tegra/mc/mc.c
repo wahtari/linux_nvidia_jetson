@@ -54,7 +54,6 @@ void __iomem *mc;
 void __iomem *mc_regs[MC_MAX_CHANNELS];
 unsigned int mssnvlink_hubs;
 void __iomem *mssnvlink_regs[MC_MAX_MSSNVLINK_HUBS];
-static u32 nvlink_reg_val[MC_MAX_MSSNVLINK_HUBS];
 
 u32 tegra_mc_readl(u32 reg)
 {
@@ -80,7 +79,7 @@ int mc_get_carveout_info(struct mc_carveout_info *inf, int *nr,
 	do {								\
 		(infop)->desc = co;					\
 		(infop)->base = mc_readl(carveout ## _BOM) |		\
-			((u64)mc_readl(carveout ## _BOM_HI) & 0x3) << 32; \
+			((u64)mc_readl(carveout ## _BOM_HI) & 0xFF) << 32; \
 		(infop)->size = mc_readl(carveout ## _SIZE_128KB);	\
 		(infop)->size <<= 17; /* Convert to bytes. */		\
 	} while (0)
@@ -361,7 +360,6 @@ static void enable_mssnvlinks(struct platform_device *pdev)
 		if (!disable_l3_alloc_hint)
 			reg_val |=  MSS_NVLINK_L3_ALLOC_HINT;
 		__raw_writel(reg_val, regs + MSSNVLINK_CYA_DESIGN_MODES);
-		nvlink_reg_val[i] = reg_val;
 	}
 
 err_out:
@@ -371,6 +369,8 @@ err_out:
 __weak const struct of_device_id tegra_mc_of_ids[] = {
 	{ .compatible = "nvidia,tegra-mc" },
 	{ .compatible = "nvidia,tegra-t18x-mc" },
+	{ .compatible = "nvidia,tegra-t19x-mc" },
+	{ .compatible = "nvidia,tegra-t23x-mc" },
 	{ }
 };
 
@@ -454,20 +454,21 @@ static int tegra_mc_probe(struct platform_device *pdev)
 
 	tegra_mcerr_init(mc_debugfs_dir, pdev);
 
+	if (tegra_get_chip_id() == TEGRA234)
+		tegra_mc_utils_init();
+
 	return 0;
 }
 
 static int tegra_mc_resume_early(struct device *dev)
 {
-	int i;
-
-	if (mssnvlink_hubs != UINT_MAX) {
-		for (i = 0; i < mssnvlink_hubs; i++)
-			__raw_writel(nvlink_reg_val[i],
-				mssnvlink_regs[i] + MSSNVLINK_CYA_DESIGN_MODES);
-	}
 	tegra_mcerr_resume();
 	return 0;
+}
+
+void __weak tegra_mc_utils_init(void)
+{
+	return;
 }
 
 u32 __weak tegra_get_dvfs_clk_change_latency_nsec(unsigned long emc_freq_khz)
@@ -477,6 +478,7 @@ u32 __weak tegra_get_dvfs_clk_change_latency_nsec(unsigned long emc_freq_khz)
 
 static int tegra_mc_remove(struct platform_device *pdev)
 {
+	disable_interrupt(0);
 	return 0;
 }
 

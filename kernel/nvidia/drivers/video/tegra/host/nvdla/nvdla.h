@@ -46,12 +46,6 @@
 #define MAX_GRID_SIZE			SZ_256
 
 /**
- * DLA MCIF (Matrix Convolution Image Filter) outstanding AXI transactions
- * count register offset
- */
-#define NVDLA_MCIF_CFG_OUTSTANDING_CNT_0_OFFSET	0x00005014	/* RW-4R */
-
-/**
  * Method ID and Method data THI registers
  */
 #define NV_DLA_THI_METHOD_ID	0x00000040      /* RW-4R */
@@ -60,6 +54,23 @@
 #define NV_DLA_OS_VERSION	0x00001080      /* RW-4R */
 
 #define MAX_NUM_ACTION_LIST	1
+
+/**
+ * Return size of FUSE_OPT_DLA_DISABLE register read
+ */
+#define FUSE_OPT_DLA_DISABLE_SIZE	4
+
+/**
+ * Value of FUSE_OPT_DLA_DISABLE register
+ * when DLA0 is disabled
+ */
+#define FUSE_OPT_DLA_0_DISABLED		1
+
+/**
+ * Value of FUSE_OPT_DLA_DISABLE register
+ * when DLA1 is disabled
+ */
+#define FUSE_OPT_DLA_1_DISABLED		2
 
 /**
  * Maximum number of queue's per engine
@@ -110,11 +121,6 @@
  */
 #define MAX_CMD_SIZE			SZ_256
 #define NVDLA_CMD_OFFSET(index)		(MAX_CMD_SIZE * index)
-
-/*
- * Tegra/DLA Hardware version specific Quirks
- */
-#define NVDLA_QUIRK_T194_A01_WAR	BIT(0)
 
 /**
  * data structure to keep command memory
@@ -185,7 +191,6 @@ enum nvdla_submit_mode {
  * @en_fw_gcov		flag to enable firmware gcov
  * @gcov_dump_pa	physical address of fw gcov buffer
  * @gcov_dump_va	virtual address of fw gcovbuffer
- * @quirks		Tegra/DLA Hardware version specific settings
  */
 struct nvdla_device {
 	struct platform_device *pdev;
@@ -210,7 +215,6 @@ struct nvdla_device {
 	u32 en_fw_gcov;
 	dma_addr_t gcov_dump_pa;
 	u32 *gcov_dump_va;
-	u32 quirks;
 	struct work_struct reset_work;
 };
 
@@ -267,7 +271,7 @@ struct nvdla_task {
 	struct nvdla_status_notify eof_task_status[MAX_NVDLA_OUT_STATUS_PER_TASK];
 	struct nvdla_mem_handle sof_timestamps[MAX_NVDLA_OUT_TIMESTAMPS_PER_TASK];
 	struct nvdla_mem_handle eof_timestamps[MAX_NVDLA_OUT_TIMESTAMPS_PER_TASK];
-	struct nvdla_mem_handle memory_handles[NVDLA_MAX_BUFFERS_PER_TASK];
+	struct nvdla_mem_handle memory_handles[MAX_NVDLA_BUFFERS_PER_TASK];
 	u8 num_prefences;
 	u8 num_postfences;
 	u8 num_in_task_status;
@@ -286,7 +290,7 @@ struct nvdla_task {
 	int timeout;
 	int pool_index;
 
-	struct dma_buf *memory_dmabuf[NVDLA_MAX_BUFFERS_PER_TASK];
+	struct dma_buf *memory_dmabuf[MAX_NVDLA_BUFFERS_PER_TASK];
 	struct dma_buf *prefences_sem_dmabuf[MAX_NVDLA_PREFENCES_PER_TASK];
 	struct dma_buf *in_task_status_dmabuf[MAX_NVDLA_IN_STATUS_PER_TASK];
 	struct dma_buf *postfences_sem_dmabuf[MAX_NVDLA_POSTFENCES_PER_TASK];

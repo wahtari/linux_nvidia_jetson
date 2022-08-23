@@ -1,9 +1,21 @@
-// SPDX-License-Identifier: GPL-2.0-only
+/*
+ * Copyright (c) 2019-2021, NVIDIA CORPORATION.  All rights reserved.
+ *
+ * This program is free software; you can redistribute it and/or modify it
+ * under the terms and conditions of the GNU General Public License,
+ * version 2, as published by the Free Software Foundation.
+ *
+ * This program is distributed in the hope it will be useful, but WITHOUT
+ * ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or
+ * FITNESS FOR A PARTICULAR PURPOSE.  See the GNU General Public License for
+ * more details.
+ *
+ * You should have received a copy of the GNU General Public License
+ * along with this program.  If not, see <http://www.gnu.org/licenses/>.
+ */
+
 /*
  * Jetson Device-tree overlay for FE-PI Audio V1 and Z V2.
- *
- * Copyright (c) 2019-2021 NVIDIA CORPORATION. All rights reserved.
- *
  */
 
 #include <dt-bindings/pinctrl/pinctrl-tegra.h>
@@ -42,6 +54,7 @@
 				micbias-voltage-m-volts = <3000>;
 				VDDA-supply = <&hdr40_vdd_3v3>;
 				VDDIO-supply = <&hdr40_vdd_3v3>;
+				#sound-dai-cells = <0>;
 				status = "okay";
 			};
 		};
@@ -50,12 +63,18 @@
 	fragment@2 {
 		target = <&tegra_sound>;
 		__overlay__ {
-			nvidia,audio-routing =
-				"x Headphone",		"x HP_OUT",
-				"x MIC_IN",		"x Mic",
-				"x ADC",		"x Mic Bias",
-				"x LINE_IN",		"x Line In",
-				"x Line Out",		"x LINE_OUT";
+			nvidia-audio-card,widgets =
+				"Headphone",	"H40-SGTL Headphone",
+				"Microphone",	"H40-SGTL Mic",
+				"Line",		"H40-SGTL Line In",
+				"Line",		"H40-SGTL Line Out";
+
+			nvidia-audio-card,routing =
+				"H40-SGTL Headphone",	"H40-SGTL HP_OUT",
+				"H40-SGTL MIC_IN",	"H40-SGTL Mic",
+				"H40-SGTL ADC",		"H40-SGTL Mic Bias",
+				"H40-SGTL LINE_IN",	"H40-SGTL Line In",
+				"H40-SGTL Line Out",	"H40-SGTL LINE_OUT";
 		};
 	};
 
@@ -63,10 +82,13 @@
 		target = <&hdr40_snd_link_i2s>;
 		__overlay__ {
 			link-name = "fe-pi-audio-z-v2";
-			codec-dai = <&sgtl5000>;
-			codec-dai-name = "sgtl5000";
 			bitclock-master;
 			frame-master;
+
+			codec {
+				sound-dai = <&sgtl5000>;
+				prefix = "H40-SGTL";
+			};
 		};
 	};
 

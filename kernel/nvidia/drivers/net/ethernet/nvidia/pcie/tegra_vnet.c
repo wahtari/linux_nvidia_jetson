@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2019-2020, NVIDIA CORPORATION.  All rights reserved.
+ * Copyright (c) 2019-2021, NVIDIA CORPORATION.  All rights reserved.
  *
  * This program is free software; you can redistribute it and/or modify it
  * under the terms and conditions of the GNU General Public License,
@@ -11,6 +11,7 @@
  * more details.
  */
 
+#include <linux/aer.h>
 #include <linux/etherdevice.h>
 #include <linux/module.h>
 #include <linux/netdevice.h>
@@ -176,7 +177,7 @@ static void tvnet_host_alloc_empty_buffers(struct tvnet_priv *tvnet)
 			break;
 		}
 
-		ep2h_empty_ptr = kmalloc(sizeof(*ep2h_empty_ptr), GFP_KERNEL);
+		ep2h_empty_ptr = kmalloc(sizeof(*ep2h_empty_ptr), GFP_ATOMIC);
 		if (!ep2h_empty_ptr) {
 			dma_unmap_single(d, iova, len, DMA_FROM_DEVICE);
 			dev_kfree_skb_any(skb);
@@ -716,11 +717,9 @@ static int tvnet_host_poll(struct napi_struct *napi, int budget)
 	int work_done;
 
 	work_done = tvnet_host_process_ep2h_msg(tvnet);
-	trace_printk("work_done: %d budget: %d\n", work_done, budget);
 	if (work_done < budget) {
 		napi_complete(napi);
 		enable_irq(pci_irq_vector(tvnet->pdev, 1));
-		mmiowb();
 	}
 
 	return work_done;
@@ -755,6 +754,8 @@ static int tvnet_host_probe(struct pci_dev *pdev,
 		dev_err(&pdev->dev, "pci_enable_device() failed: %d\n", ret);
 		goto free_netdev;
 	}
+
+	pci_enable_pcie_error_reporting(pdev);
 
 	/*
 	 * In CPU memory write case, skb->data buffer is copied to dst in BAR.
@@ -862,6 +863,19 @@ fail:
 	return ret;
 }
 
+static void tvnet_host_remove(struct pci_dev *pdev)
+{
+	struct tvnet_priv *tvnet = pci_get_drvdata(pdev);
+
+	free_irq(pci_irq_vector(pdev, 0), tvnet->ndev);
+	free_irq(pci_irq_vector(pdev, 1), tvnet->ndev);
+	pci_free_irq_vectors(pdev);
+	unregister_netdev(tvnet->ndev);
+	netif_napi_del(&tvnet->napi);
+	pci_disable_device(pdev);
+	free_netdev(tvnet->ndev);
+}
+
 static int tvnet_host_suspend(struct pci_dev *pdev, pm_message_t state)
 {
 	struct tvnet_priv *tvnet = pci_get_drvdata(pdev);
@@ -906,6 +920,7 @@ static struct pci_driver tvnet_pci_driver = {
 	.name		= "tvnet",
 	.id_table	= tvnet_host_pci_tbl,
 	.probe		= tvnet_host_probe,
+	.remove		= tvnet_host_remove,
 #ifdef CONFIG_PM
 	.suspend        = tvnet_host_suspend,
 	.resume         = tvnet_host_resume,

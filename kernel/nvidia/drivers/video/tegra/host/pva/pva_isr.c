@@ -1,7 +1,7 @@
 /*
- * PVA ISR code for T194
+ * PVA ISR code
  *
- * Copyright (c) 2016-2018, NVIDIA Corporation.  All rights reserved.
+ * Copyright (c) 2016-2021, NVIDIA Corporation.  All rights reserved.
  *
  * This program is free software; you can redistribute it and/or modify it
  * under the terms and conditions of the GNU General Public License,
@@ -16,6 +16,7 @@
  * along with this program.  If not, see <http://www.gnu.org/licenses/>.
  */
 
+#include "pva-interface.h"
 #include <linux/irq.h>
 #include <linux/slab.h>
 #include <linux/wait.h>
@@ -25,21 +26,35 @@
 #include "dev.h"
 #include "pva.h"
 
-static irqreturn_t pva_isr(int irq, void *dev_id)
+#define PVA_MASK_LOW_16BITS 0xff
+
+#ifdef CONFIG_TEGRA_T23X_GRHOST
+#include "pva_isr_t23x.h"
+#endif
+
+static irqreturn_t pva_system_isr(int irq, void *dev_id)
 {
 	struct pva *pva = dev_id;
 	struct platform_device *pdev = pva->pdev;
-	u32 checkpoint = host1x_readl(pdev, cfg_ccq_status8_r());
-	u32 status7 = pva_read_mailbox(pdev, PVA_MBOX_ISR);
-	u32 status5 = pva_read_mailbox(pdev, PVA_MBOX_AISR);
-	u32 lic_int_status = host1x_readl(pdev, sec_lic_intr_status_r());
+	u32 checkpoint = host1x_readl(pdev,
+		cfg_ccq_status_r(pva->version, 0, 8));
+	u32 status7 = pva->version_config->read_mailbox(pdev, PVA_MBOX_ISR);
+	u32 status5 = pva->version_config->read_mailbox(pdev, PVA_MBOX_AISR);
+	u32 lic_int_status = host1x_readl(pdev,
+		sec_lic_intr_status_r(pva->version));
+	u32 h1xflgs;
 	bool recover = false;
 
 	if (status5 & PVA_AISR_INT_PENDING) {
 		nvhost_dbg_info("PVA AISR (%x)", status5);
 
-		/* For now, just log the errors */
+		if (status5 & (PVA_AISR_TASK_COMPLETE | PVA_AISR_TASK_ERROR)) {
+			atomic_add(1, &pva->n_pending_tasks);
+			queue_work(pva->task_status_workqueue,
+				   &pva->task_update_work);
+		}
 
+		/* For now, just log the errors */
 		if (status5 & PVA_AISR_TASK_ERROR)
 			nvhost_warn(&pdev->dev, "PVA AISR: PVA_AISR_TASK_ERROR");
 		if (status5 & PVA_AISR_THRESHOLD_EXCEEDED)
@@ -57,7 +72,7 @@ static irqreturn_t pva_isr(int irq, void *dev_id)
 			recover = true;
 		}
 
-		pva_write_mailbox(pdev, PVA_MBOX_AISR, 0x0);
+		pva->version_config->write_mailbox(pdev, PVA_MBOX_AISR, 0x0);
 	}
 
 	if (status7 & PVA_INT_PENDING) {
@@ -66,9 +81,22 @@ static irqreturn_t pva_isr(int irq, void *dev_id)
 		pva_mailbox_isr(pva);
 	}
 
+
 	/* Check for watchdog timer interrupt */
 	if (lic_int_status & sec_lic_intr_enable_wdt_f(SEC_LIC_INTR_WDT)) {
 		nvhost_warn(&pdev->dev, "WatchDog Timer");
+		recover = true;
+	}
+
+	/* Check for host1x errors*/
+	h1xflgs = sec_lic_intr_enable_h1x_f(SEC_LIC_INTR_H1X_ALL);
+	if (lic_int_status & h1xflgs) {
+		nvhost_warn(&pdev->dev, "Pva Host1x errors (0x%x)",
+			     lic_int_status);
+
+		/* Clear the interrupt */
+		host1x_writel(pva->pdev, sec_lic_intr_status_r(pva->version),
+			      (lic_int_status & h1xflgs));
 		recover = true;
 	}
 
@@ -86,24 +114,37 @@ int pva_register_isr(struct platform_device *dev)
 	struct nvhost_device_data *pdata = platform_get_drvdata(dev);
 	struct pva *pva = pdata->private_data;
 	int err;
+	int i;
+	irq_handler_t irq_handler;
 
-	pva->irq = platform_get_irq(dev, 0);
-	if (pva->irq <= 0) {
-		dev_err(&dev->dev, "no irq\n");
-		err = -ENOENT;
-		goto isr_err;
+	for (i = 0; i < pva->version_config->irq_count; i++) {
+		pva->irq[i] = platform_get_irq(dev, i);
+		if (pva->irq[i] <= 0) {
+			dev_err(&dev->dev, "no irq %d\n", i);
+			err = -ENOENT;
+			break;
+		}
+		/* IRQ0 is for mailbox/h1x/watchdog */
+		if (i == 0) {
+			irq_handler = pva_system_isr;
+		} else {
+#ifdef CONFIG_TEGRA_T23X_GRHOST
+			irq_handler = pva_ccq_isr;
+#else
+			pr_err("%s: invalid number of IRQs for build type\n",
+			       __func__);
+			err = -EINVAL;
+			break;
+#endif
+		}
+		err = request_threaded_irq(pva->irq[i], NULL, irq_handler,
+					IRQF_ONESHOT, "pva-isr", pva);
+		if (err) {
+			pr_err("%s: request_irq(%d) failed(%d)\n", __func__,
+				pva->irq[i], err);
+			break;
+		}
+		disable_irq(pva->irq[i]);
 	}
-
-	err = request_threaded_irq(pva->irq, NULL, pva_isr,
-				   IRQF_ONESHOT, "pva-isr", pva);
-	if (err) {
-		pr_err("%s: request_irq(%d) failed(%d)\n", __func__,
-		pva->irq, err);
-		goto isr_err;
-	}
-
-	disable_irq(pva->irq);
-
-isr_err:
 	return err;
 }

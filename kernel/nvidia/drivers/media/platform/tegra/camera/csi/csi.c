@@ -1,7 +1,7 @@
 /*
  * NVIDIA Tegra CSI Device
  *
- * Copyright (c) 2015-2019, NVIDIA CORPORATION.  All rights reserved.
+ * Copyright (c) 2015-2021, NVIDIA CORPORATION.  All rights reserved.
  *
  * Author: Bryan Wu <pengw@nvidia.com>
  *
@@ -9,6 +9,7 @@
  * it under the terms of the GNU General Public License version 2 as
  * published by the Free Software Foundation.
  */
+
 #include <linux/clk.h>
 #include <linux/device.h>
 #include <linux/gpio/consumer.h>
@@ -130,33 +131,6 @@ u32 read_settle_time_from_dt(struct tegra_csi_channel *chan)
 	return cil_settletime;
 }
 
-u32 read_discontinuous_clk_from_dt(struct tegra_csi_channel *chan)
-{
-	struct camera_common_data *s_data = chan->s_data;
-	struct sensor_mode_properties *mode = read_mode_from_dt(s_data);
-	struct device *dev = chan->csi->dev;
-	unsigned int discontinuous_clk = 1;
-
-	if (mode) {
-		discontinuous_clk = mode->signal_properties.discontinuous_clk;
-		dev_dbg(dev, "discontinuous_clk = %u reading from props\n", discontinuous_clk);
-	} else if (chan->of_node) {
-		int err = 0;
-		const char *str;
-
-		err = of_property_read_string(chan->of_node, "discontinuous_clk",
-			&str);
-		if (!err)
-			discontinuous_clk = !strncmp(str, "yes", sizeof("yes"));
-		else
-			dev_dbg(dev,
-				"no discontinuous_clk in of_node");
-		dev_dbg(dev, "discontinuous_clk = %u from of_node\n", discontinuous_clk);
-	}
-
-	return discontinuous_clk;
-}
-
 u32 read_phy_mode_from_dt(struct tegra_csi_channel *chan)
 {
 	struct camera_common_data *s_data = chan->s_data;
@@ -175,24 +149,29 @@ u32 read_phy_mode_from_dt(struct tegra_csi_channel *chan)
 	return phy_mode;
 }
 
-u64 read_pixel_clk_from_dt(struct tegra_csi_channel *chan)
+u64 read_mipi_clk_from_dt(struct tegra_csi_channel *chan)
 {
 	struct sensor_signal_properties *sig_props;
 	struct sensor_properties *props;
-	u64 pix_clk = 0;
+	u64 mipi_clk = 0;
 	int mode_idx;
 
+
 	if (chan && chan->s_data) {
-		mode_idx = chan->s_data->mode_prop_idx;
-		props =  &chan->s_data->sensor_props;
-		sig_props = &props->sensor_modes[mode_idx].signal_properties;
-		if (sig_props->serdes_pixel_clock.val != 0ULL)
-			pix_clk = sig_props->serdes_pixel_clock.val;
-		else
-			pix_clk = sig_props->pixel_clock.val;
+		struct v4l2_ctrl *link_freq_ctrl = v4l2_ctrl_find(chan->s_data->ctrl_handler,V4L2_CID_LINK_FREQ);
+		if (link_freq_ctrl != NULL) {
+			int idx = v4l2_ctrl_g_ctrl(link_freq_ctrl);
+			mipi_clk = link_freq_ctrl->qmenu_int[idx] / 2;
+		}
+		else {
+			mode_idx = chan->s_data->mode_prop_idx;
+			props =  &chan->s_data->sensor_props;
+			sig_props = &props->sensor_modes[mode_idx].signal_properties;
+			mipi_clk = sig_props->mipi_clock.val;
+		}
 	}
 
-	return pix_clk;
+	return mipi_clk;
 }
 
 void set_csi_portinfo(struct tegra_csi_device *csi,
@@ -206,7 +185,7 @@ void set_csi_portinfo(struct tegra_csi_device *csi,
 }
 EXPORT_SYMBOL(set_csi_portinfo);
 
-static int tegra_csi_power(struct tegra_csi_device *csi,
+int tegra_csi_power(struct tegra_csi_device *csi,
 			struct tegra_csi_channel *chan, int enable)
 {
 	int err = 0;
@@ -225,7 +204,7 @@ static int tegra_csi_power(struct tegra_csi_device *csi,
 }
 EXPORT_SYMBOL(tegra_csi_power);
 
-static int tegra_csi_error_recovery(struct tegra_channel *chan,
+int tegra_csi_error_recovery(struct tegra_channel *chan,
 	struct tegra_csi_device *csi, struct tegra_csi_channel *csi_chan)
 {
 	int err = 0;
@@ -294,6 +273,21 @@ void tegra_csi_stop_streaming(struct tegra_csi_channel *chan, int port_idx)
 	csi->fops->csi_stop_streaming(chan, port_idx);
 }
 EXPORT_SYMBOL(tegra_csi_stop_streaming);
+
+int tegra_csi_tpg_set_gain(struct v4l2_subdev *sd, void *arg)
+{
+	struct tegra_csi_channel *chan = to_csi_chan(sd);
+	struct tegra_csi_device *csi = to_csi(sd);
+	int *val = arg;
+
+	if (!chan->pg_mode) {
+		dev_err(chan->csi->dev, "CSI is not in TPG mode\n");
+		return -EINVAL;
+	}
+
+	return csi->fops->tpg_set_gain(chan, *val);
+}
+EXPORT_SYMBOL(tegra_csi_tpg_set_gain);
 
 static int update_video_source(struct tegra_csi_device *csi, int on, int is_tpg)
 {
@@ -486,6 +480,7 @@ static struct v4l2_mbus_framefmt tegra_csi_tpg_fmts[] = {
 };
 
 static struct v4l2_frmsize_discrete tegra_csi_tpg_sizes[] = {
+	{320, 240},
 	{1280, 720},
 	{1920, 1080},
 	{3840, 2160}
@@ -949,9 +944,6 @@ static int tegra_csi_channel_init_one(struct tegra_csi_channel *chan)
 			media_entity_cleanup(&sd->entity);
 		}
 	}
-
-	chan->packet_crc_error = 0;
-
 	return ret;
 }
 
@@ -1069,11 +1061,6 @@ void tpg_csi_media_controller_cleanup(struct tegra_csi_device *csi)
 		if (!item->pg_mode)
 			continue;
 		sd = &item->subdev;
-		/* decrement media device entity count */
-#if LINUX_VERSION_CODE < KERNEL_VERSION(4, 9, 0)
-		if (sd->entity.parent)
-			sd->entity.parent->entity_id--;
-#endif
 		v4l2_device_unregister_subdev(sd);
 		media_entity_cleanup(&sd->entity);
 		list_del(&item->list);

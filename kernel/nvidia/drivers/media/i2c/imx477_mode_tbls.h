@@ -29,7 +29,6 @@
 
 static const imx477_reg imx477_start[] = {
 	{IMX477_STANDBY_REG, 0x1},
-	{IMX477_TABLE_WAIT_MS, IMX477_WAIT_MS*3},
 	{IMX477_TABLE_END, 0x00}
 };
 
@@ -39,9 +38,7 @@ static const imx477_reg imx477_stop[] = {
 };
 
 static const imx477_reg imx477_mode_common[] = {
-	/* software reset */
-	{0x0103, 0x01},
-	{IMX477_TABLE_WAIT_MS, IMX477_WAIT_MS*10},
+	{IMX477_TABLE_WAIT_MS, IMX477_WAIT_MS},
 	{0x0136, 0x18},
 	{0x0137, 0x00},
 	{0x0808, 0x02},
