@@ -37,11 +37,51 @@
 	};
 	eeprom-manager {
 		data-size = <0x100>;
+		bus@0 {
+			i2c-bus = <&gen1_i2c>;
+			eeprom@1 {
+				slave-address = <0x57>;
+				label = "cvb";
+			};
+		};
+
 		bus@1 {
 			i2c-bus = <&gen2_i2c>;
 			eeprom@1 {
 				slave-address = <0x50>;
 				label = "super-module";
+			};
+		};
+	};
+	pwm-fan {
+		pwms = <&tegra_pwm6 0 45334>;
+		vdd-fan-supply = <&p3509_vdd_fan>;
+		profiles {
+			default = "quiet";
+			quiet {
+				state_cap = <4>;
+				active_pwm = <0 130 160 200 255 255 255 255 255 255>;
+			};
+			cool {
+				state_cap = <4>;
+				active_pwm = <0 140 170 200 255 255 255 255 255 255>;
+			};
+		};
+	};
+	thermal-fan-est {
+		profiles {
+			default = "quiet";
+			quiet {
+				active_trip_temps = <0 46000 60000 68000 76000
+						140000 150000 160000 170000 180000>;
+				active_hysteresis = <0 8000 8000 7000 7000
+						0 0 0 0 0>;
+			};
+			cool {
+				active_trip_temps = <0 35000 45000 53000 61000
+						140000 150000 160000 170000 180000>;
+				active_hysteresis = <0 8000 8000 7000 7000
+						0 0 0 0 0>;
 			};
 		};
 	};
