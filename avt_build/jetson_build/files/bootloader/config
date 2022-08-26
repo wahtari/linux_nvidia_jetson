@@ -80,10 +80,10 @@ nx_devkit = BoardDefinition('Jetson Xavier NX devkit', '0x19', '3668', [
     #NX 16GB
     Configuration('DevKit', 'tegra194-p3668-0001-p3509-0000-avt.dtb', '0003'),
 
-    Configuration('Wahtari nCam Jetson', 'tegra194-p3668-0000-p3509-0000-wahtari-ncam-jetson.dts', '0000'),
-    Configuration('Wahtari nCam Jetson', 'tegra194-p3668-0001-p3509-0000-wahtari-ncam-jetson.dts', '0001'),
+    Configuration('Wahtari nCam Jetson', 'tegra194-p3668-0000-p3509-0000-wahtari-ncam-jetson.dtb', '0000'),
+    Configuration('Wahtari nCam Jetson', 'tegra194-p3668-0001-p3509-0000-wahtari-ncam-jetson.dtb', '0001'),
     #NX 16GB
-    Configuration('Wahtari nCam Jetson', 'tegra194-p3668-0001-p3509-0000-wahtari-ncam-jetson.dts', '0003'),
+    Configuration('Wahtari nCam Jetson', 'tegra194-p3668-0001-p3509-0000-wahtari-ncam-jetson.dtb', '0003'),
 
     #Configuration('Auvidea JNX30 (beta)', 'tegra194-p3668-all-p3509-0000-auvidea-jnx30.dtb', '0000', beta=True),
     #Configuration('Auvidea JNX30 (beta)', 'tegra194-p3668-all-p3509-0000-auvidea-jnx30.dtb', '0001', beta=True),
