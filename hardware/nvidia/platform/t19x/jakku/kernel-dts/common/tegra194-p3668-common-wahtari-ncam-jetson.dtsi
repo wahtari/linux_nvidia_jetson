@@ -312,15 +312,6 @@
 			label = "w-disable2";
 			status = "okay";
 		};
-		suspend_gpio: suspend-led-gpio {
-			gpio-hog;
-			output-high;
-			gpio-suspend;
-			suspend-output-low;
-			gpios = <TEGRA194_AON_GPIO(CC, 1) GPIO_ACTIVE_HIGH>;
-			label = "suspend-led-gpio";
-			status = "okay";
-		};
 	};
 #endif
 
@@ -432,54 +423,6 @@
 		status = "okay";
 	};
 
-	spi@3210000{ /* SPI1 in 40 pin conn */
-		status = "okay";
-		spi@0 { /* chip select 0 */
-			compatible = "tegra-spidev";
-			reg = <0x0>;
-			spi-max-frequency = <50000000>;
-			controller-data {
-				nvidia,enable-hw-based-cs;
-				nvidia,rx-clk-tap-delay = <0x10>;
-				nvidia,tx-clk-tap-delay = <0x0>;
-			};
-		};
-		spi@1 { /* chip select 1 */
-			compatible = "tegra-spidev";
-			reg = <0x1>;
-			spi-max-frequency = <50000000>;
-			controller-data {
-				nvidia,enable-hw-based-cs;
-				nvidia,rx-clk-tap-delay = <0x10>;
-				nvidia,tx-clk-tap-delay = <0x0>;
-			};
-		};
-	};
-
-	spi@3230000{ /* SPI3 in 40 pin conn */
-		status = "okay";
-		spi@0 { /* chip select 0 */
-			compatible = "tegra-spidev";
-			reg = <0x0>;
-			spi-max-frequency = <50000000>;
-			controller-data {
-				nvidia,enable-hw-based-cs;
-				nvidia,rx-clk-tap-delay = <0x10>;
-				nvidia,tx-clk-tap-delay = <0x0>;
-			};
-		};
-		spi@1 { /* chips select 1 */
-			compatible = "tegra-spidev";
-			reg = <0x1>;
-			spi-max-frequency = <50000000>;
-			controller-data {
-				nvidia,enable-hw-based-cs;
-				nvidia,rx-clk-tap-delay = <0x10>;
-				nvidia,tx-clk-tap-delay = <0x0>;
-			};
-		};
-	};
-
 	ether_qos@2490000 {
 		nvidia,phy-reset-gpio = <&tegra_main_gpio TEGRA194_MAIN_GPIO(R, 1) 0>;
 		nvidia,phy-reset-post-delay = <224>;
@@ -493,16 +436,6 @@
 			};
 		};
 	};
-
-	leds {
-		compatible = "gpio-leds";
-		status = "okay";
-		pwr {
-			gpios = <&tegra_aon_gpio TEGRA194_AON_GPIO(CC, 1) GPIO_ACTIVE_HIGH>;
-			default-state = "on";
-		};
-	};
-
 
 	/* QSPI flash S25FS128SAGNFI103 is controlled by qspi0 */
 	spi@3270000 {
